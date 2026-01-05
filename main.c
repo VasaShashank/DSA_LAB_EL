@@ -4,13 +4,21 @@
 
 #define SIZE 50
 #define PRICE_HISTORY 5
+#define MAX_STOCKS 100
 
-// -------------------- STRUCTURES --------------------
+// STRUCTURES
 
 typedef struct Queue {
     float prices[PRICE_HISTORY];
     int front, rear, count;
 } Queue;
+
+struct Stock;
+
+typedef struct BST {
+    struct Stock *stock;
+    struct BST *left, *right;
+} BST;
 
 typedef struct Stock {
     char name[20];
@@ -18,21 +26,19 @@ typedef struct Stock {
     float currentPrice;
     int quantity;
     Queue history;
-    struct Stock *next;   // for linked list
+    struct Stock *next;
 } Stock;
 
-typedef struct BST {
-    char name[20];
-    struct BST *left, *right;
-} BST;
-
-// -------------------- GLOBALS --------------------
+// GLOBALS 
 
 Stock* hashTable[SIZE];
-Stock* transactionHead = NULL;
 BST* bstRoot = NULL;
 
-// -------------------- HASH FUNCTION --------------------
+Stock* maxHeap[MAX_STOCKS];
+Stock* minHeap[MAX_STOCKS];
+int maxSize = 0, minSize = 0;
+
+// HASH FUNCTION 
 
 int hash(char *name) {
     int sum = 0;
@@ -41,7 +47,7 @@ int hash(char *name) {
     return sum % SIZE;
 }
 
-// -------------------- QUEUE FUNCTIONS --------------------
+// QUEUE FUNCTIONS
 
 void initQueue(Queue *q) {
     q->front = q->rear = q->count = 0;
@@ -57,31 +63,105 @@ void enqueue(Queue *q, float price) {
     q->count++;
 }
 
-// -------------------- BST FUNCTIONS --------------------
+// BST FUNCTIONS
 
-BST* insertBST(BST* root, char *name) {
+BST* insertBST(BST* root, Stock *s) {
     if (!root) {
         BST* node = (BST*)malloc(sizeof(BST));
-        strcpy(node->name, name);
+        node->stock = s;
         node->left = node->right = NULL;
         return node;
     }
-    if (strcmp(name, root->name) < 0)
-        root->left = insertBST(root->left, name);
+
+    if (strcmp(s->name, root->stock->name) < 0)
+        root->left = insertBST(root->left, s);
     else
-        root->right = insertBST(root->right, name);
+        root->right = insertBST(root->right, s);
+
     return root;
 }
 
 void inorderBST(BST* root) {
     if (root) {
         inorderBST(root->left);
-        printf("%s\n", root->name);
+
+        printf("%s  Buy: %.2f  Current: %.2f  Qty: %d\n",
+               root->stock->name,
+               root->stock->buyPrice,
+               root->stock->currentPrice,
+               root->stock->quantity);
+
         inorderBST(root->right);
     }
 }
 
-// -------------------- CORE FUNCTIONS --------------------
+// HEAP HELPERS
+
+void swap(Stock** a, Stock** b) {
+    Stock* temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+// MAX HEAP (Top gainer)
+
+void heapifyUpMax(int i) {
+    while (i && maxHeap[(i - 1)/2]->currentPrice < maxHeap[i]->currentPrice) {
+        swap(&maxHeap[i], &maxHeap[(i - 1)/2]);
+        i = (i - 1)/2;
+    }
+}
+
+void heapifyDownMax(int i) {
+    int largest = i, left = 2*i + 1, right = 2*i + 2;
+
+    if (left < maxSize && maxHeap[left]->currentPrice > maxHeap[largest]->currentPrice)
+        largest = left;
+    if (right < maxSize && maxHeap[right]->currentPrice > maxHeap[largest]->currentPrice)
+        largest = right;
+
+    if (largest != i) {
+        swap(&maxHeap[i], &maxHeap[largest]);
+        heapifyDownMax(largest);
+    }
+}
+
+void insertMaxHeap(Stock* s) {
+    maxHeap[maxSize] = s;
+    heapifyUpMax(maxSize);
+    maxSize++;
+}
+
+// MIN HEAP (Top loser)
+
+void heapifyUpMin(int i) {
+    while (i && minHeap[(i - 1)/2]->currentPrice > minHeap[i]->currentPrice) {
+        swap(&minHeap[i], &minHeap[(i - 1)/2]);
+        i = (i - 1)/2;
+    }
+}
+
+void heapifyDownMin(int i) {
+    int smallest = i, left = 2*i + 1, right = 2*i + 2;
+
+    if (left < minSize && minHeap[left]->currentPrice < minHeap[smallest]->currentPrice)
+        smallest = left;
+    if (right < minSize && minHeap[right]->currentPrice < minHeap[smallest]->currentPrice)
+        smallest = right;
+
+    if (smallest != i) {
+        swap(&minHeap[i], &minHeap[smallest]);
+        heapifyDownMin(smallest);
+    }
+}
+
+void insertMinHeap(Stock* s) {
+    minHeap[minSize] = s;
+    heapifyUpMin(minSize);
+    minSize++;
+}
+
+// CORE FUNCTIONS
 
 void addStock() {
     Stock* s = (Stock*)malloc(sizeof(Stock));
@@ -102,11 +182,10 @@ void addStock() {
     s->next = hashTable[index];
     hashTable[index] = s;
 
-    // Transaction history
-    s->next = transactionHead;
-    transactionHead = s;
+    bstRoot = insertBST(bstRoot, s);
 
-    bstRoot = insertBST(bstRoot, s->name);
+    insertMaxHeap(s);
+    insertMinHeap(s);
 
     printf("Stock Added Successfully!\n");
 }
@@ -126,6 +205,10 @@ void updatePrice() {
         if (strcmp(temp->name, name) == 0) {
             temp->currentPrice = price;
             enqueue(&temp->history, price);
+
+            heapifyDownMax(0);
+            heapifyDownMin(0);
+
             printf("Price Updated!\n");
             return;
         }
@@ -136,10 +219,9 @@ void updatePrice() {
 
 void portfolioSummary() {
     float investment = 0, currentValue = 0;
-    Stock* temp;
 
     for (int i = 0; i < SIZE; i++) {
-        temp = hashTable[i];
+        Stock* temp = hashTable[i];
         while (temp) {
             investment += temp->buyPrice * temp->quantity;
             currentValue += temp->currentPrice * temp->quantity;
@@ -153,23 +235,13 @@ void portfolioSummary() {
 }
 
 void topGainersLosers() {
-    Stock *max = NULL, *min = NULL, *temp;
-
-    for (int i = 0; i < SIZE; i++) {
-        temp = hashTable[i];
-        while (temp) {
-            if (!max || temp->currentPrice > max->currentPrice)
-                max = temp;
-            if (!min || temp->currentPrice < min->currentPrice)
-                min = temp;
-            temp = temp->next;
-        }
+    if (maxSize == 0) {
+        printf("No stocks available\n");
+        return;
     }
 
-    if (max)
-        printf("\nTop Gainer: %s (%.2f)", max->name, max->currentPrice);
-    if (min)
-        printf("\nTop Loser: %s (%.2f)\n", min->name, min->currentPrice);
+    printf("\nTop Gainer: %s (%.2f)", maxHeap[0]->name, maxHeap[0]->currentPrice);
+    printf("\nTop Loser: %s (%.2f)\n", minHeap[0]->name, minHeap[0]->currentPrice);
 }
 
 void displaySortedStocks() {
@@ -177,13 +249,13 @@ void displaySortedStocks() {
     inorderBST(bstRoot);
 }
 
-// -------------------- MENU --------------------
+// MENU
 
 int main() {
     int choice;
 
     while (1) {
-        printf("\n--- Dynamic Stock Portfolio Analyzer ---\n");
+        printf("\n--- Dynamic Stock Portfolio Analyzer (Final Version) ---\n");
         printf("1. Add Stock\n");
         printf("2. Update Stock Price\n");
         printf("3. Portfolio Summary\n");
@@ -203,5 +275,4 @@ int main() {
             default: printf("Invalid Choice!\n");
         }
     }
-    return 0;
 }
